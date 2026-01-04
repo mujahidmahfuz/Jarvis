@@ -1,7 +1,7 @@
 """
 🚀 FunctionGemma 270M Local Fine-Tuning Script
 Matches the Colab notebook EXACTLY for consistent results.
-Optimized for RTX 3060 Ti (8GB VRAM) - NO QUANTIZATION (Full/Half Precision)
+Optimized for RTX 3060 Ti (8GB VRAM)
 
 Usage:
     python train_functiongemma_local.py
@@ -9,7 +9,7 @@ Usage:
 Prerequisites:
     1. Accept the license at: https://huggingface.co/google/functiongemma-270m-it
     2. Login with: huggingface-cli login
-    3. Install dependencies: pip install torch transformers datasets peft accelerate trl
+    3. Install dependencies: pip install torch transformers datasets peft accelerate bitsandbytes trl
 """
 
 import os
@@ -49,7 +49,7 @@ CONFIG = {
     "save_steps": 100,
     
     # Memory optimization for 8GB VRAM
-    # NO 4-bit quantization for 270M model!
+    "use_4bit": True,
     "use_gradient_checkpointing": True,
 }
 
@@ -58,8 +58,8 @@ def print_banner():
     """Print a nice banner."""
     print("\n" + "=" * 60)
     print("🚀 FunctionGemma 270M Local Fine-Tuning")
+    print("   Matching Colab Configuration EXACTLY")
     print("   Optimized for RTX 3060 Ti (8GB VRAM)")
-    print("   Running in NATIVE precision (No 4-bit quantization)")
     print("=" * 60 + "\n")
 
 
@@ -133,55 +133,38 @@ def load_training_data(config: dict):
 
 def load_model_and_tokenizer(config: dict):
     """
-    Load the model WITHOUT quantization (better performance for small models).
+    Load the model with 4-bit quantization for memory efficiency.
+    Matches Colab but uses 4-bit for 8GB VRAM.
     """
-    from transformers import AutoModelForCausalLM, AutoTokenizer
+    from transformers import AutoModelForCausalLM, AutoTokenizer, BitsAndBytesConfig
     
     print(f"\n🔄 Loading {config['model_name']}...")
+    print("   (This may take a few minutes on first run)")
     
-    # Load tokenizer
+    # Configure 4-bit quantization (needed for 8GB VRAM)
+    if config["use_4bit"]:
+        bnb_config = BitsAndBytesConfig(
+            load_in_4bit=True,
+            bnb_4bit_quant_type="nf4",
+            bnb_4bit_compute_dtype=torch.float16,
+            bnb_4bit_use_double_quant=True,
+        )
+        print("   Using 4-bit quantization for memory efficiency")
+    else:
+        bnb_config = None
+    
+    # Load tokenizer - EXACTLY like Colab
     tokenizer = AutoTokenizer.from_pretrained(config["model_name"])
     tokenizer.pad_token = tokenizer.eos_token
     tokenizer.padding_side = "right"
     
-    # --- SPECIAL TOKEN CHECK ---
-    # Ensure all tokens from the dataset are actually known by the tokenizer
-    # Function Gemma uses specific control tokens.
-    special_tokens_needed = [
-        "<start_function_declaration>", "<end_function_declaration>",
-        "<start_function_call>", "<end_function_call>",
-        "<start_function_response>", "<end_function_response>",
-        "<escape>",
-        "<start_of_turn>", "<end_of_turn>"
-    ]
-    
-    print("   Checking special tokens...")
-    new_tokens = []
-    for token in special_tokens_needed:
-        if token not in tokenizer.vocab:
-            new_tokens.append(token)
-            
-    if new_tokens:
-        print(f"   ⚠️  Adding {len(new_tokens)} missing tokens: {new_tokens}")
-        tokenizer.add_tokens(new_tokens)
-    else:
-        print("   ✅ All special tokens present.")
-
-    # Load model in FP16 (or BF16 if supported) for efficiency without quantization
-    # RTX 3060 Ti supports BF16, but FP16 is safer default for all.
-    torch_dtype = torch.float16
-    
+    # Load model
     model = AutoModelForCausalLM.from_pretrained(
         config["model_name"],
-        torch_dtype=torch_dtype,
+        quantization_config=bnb_config,
         device_map="auto",
         trust_remote_code=True,
     )
-    
-    # Resize embeddings if we added tokens
-    if new_tokens:
-        print("   🔄 Resizing model embeddings for new tokens...")
-        model.resize_token_embeddings(len(tokenizer))
     
     param_count = sum(p.numel() for p in model.parameters())
     print(f"✅ Model loaded! ({param_count:,} parameters)")
@@ -192,17 +175,16 @@ def load_model_and_tokenizer(config: dict):
 def apply_lora(model, config: dict):
     """
     Apply LoRA adapters to the model.
+    EXACTLY like Colab notebook.
     """
     from peft import LoraConfig, get_peft_model, prepare_model_for_kbit_training
     
     print("\n🔧 Applying LoRA adapters...")
     
-    # We are NOT using k-bit training, but we might still want to freeze layers?
-    # Actually for full precision/fp16 LoRA, we don't strictly need prepare_model_for_kbit_training
-    # But it does help strictly freeze base model.
-    # However, since we aren't using bitsandbytes, let's just use standard PEFT usage.
+    # Prepare model for k-bit training - EXACTLY like Colab
+    model = prepare_model_for_kbit_training(model)
     
-    # Configure LoRA
+    # Configure LoRA - EXACTLY like Colab
     lora_config = LoraConfig(
         r=config["lora_r"],
         lora_alpha=config["lora_alpha"],
@@ -211,8 +193,6 @@ def apply_lora(model, config: dict):
         bias="none",
         task_type="CAUSAL_LM",
     )
-    
-    # model = prepare_model_for_kbit_training(model) # Removed as we aren't using kbit
     
     model = get_peft_model(model, lora_config)
     
@@ -227,6 +207,7 @@ def apply_lora(model, config: dict):
 def prepare_dataset(data: list, tokenizer, config: dict):
     """
     Prepare the dataset for training.
+    EXACTLY like Colab notebook.
     """
     from datasets import Dataset
     
@@ -234,12 +215,12 @@ def prepare_dataset(data: list, tokenizer, config: dict):
     
     dataset = Dataset.from_list(data)
     
-    # Tokenize
+    # Tokenize - EXACTLY like Colab (max_length=1024)
     def tokenize(example):
         return tokenizer(
             example["text"],
             truncation=True,
-            max_length=config["max_seq_length"],
+            max_length=config["max_seq_length"],  # 1024 like Colab
             padding="max_length",
         )
     
@@ -252,6 +233,7 @@ def prepare_dataset(data: list, tokenizer, config: dict):
 def train(model, tokenizer, dataset, config: dict):
     """
     Run the training loop.
+    EXACTLY like Colab notebook.
     """
     from transformers import TrainingArguments, Trainer, DataCollatorForLanguageModeling
     
@@ -260,11 +242,13 @@ def train(model, tokenizer, dataset, config: dict):
     print(f"   Batch size: {config['batch_size']}")
     print(f"   Gradient accumulation: {config['gradient_accumulation']}")
     print(f"   Effective batch size: {config['batch_size'] * config['gradient_accumulation']}")
+    print(f"   Learning rate: {config['learning_rate']}")
+    print(f"   Max sequence length: {config['max_seq_length']}")
     
     # Create output directory
     os.makedirs(config["output_dir"], exist_ok=True)
     
-    # Training arguments
+    # Training arguments - EXACTLY like Colab
     training_args = TrainingArguments(
         output_dir=config["output_dir"],
         num_train_epochs=config["num_epochs"],
@@ -275,14 +259,15 @@ def train(model, tokenizer, dataset, config: dict):
         logging_steps=config["logging_steps"],
         save_steps=config["save_steps"],
         save_total_limit=2,
-        fp16=True, # Use FP16 for speed and memory savings
-        optim="adamw_torch", # Standard optimizer, no proprietary bitsandbytes needed
+        fp16=True,
+        optim="paged_adamw_8bit",
         report_to="none",
+        # Memory optimizations for 8GB VRAM
         gradient_checkpointing=config["use_gradient_checkpointing"],
         dataloader_pin_memory=False,
     )
     
-    # Create trainer
+    # Create trainer - EXACTLY like Colab
     trainer = Trainer(
         model=model,
         args=training_args,
@@ -319,42 +304,30 @@ def save_model(model, tokenizer, config: dict):
 def test_model(model, tokenizer, config: dict):
     """
     Test the fine-tuned model with sample prompts.
+    Uses EXACT prompt format from training data.
     """
     print("\n🧪 Testing the fine-tuned model...")
     
-    # Load a sample from training data
+    # Load a sample from training data to get the EXACT prompt structure
     jsonl_path = config["training_file"]
     json_path = config["training_file_json"]
     
     if os.path.exists(jsonl_path):
         with open(jsonl_path, 'r', encoding='utf-8') as f:
-            line = f.readline()
-            if line:
-                sample = json.loads(line)
-            else:
-                sample = None
-    elif os.path.exists(json_path):
+            sample = json.loads(f.readline())
+    else:
         with open(json_path, 'r', encoding='utf-8') as f:
             entries = json.load(f)
-            sample = entries[0] if entries else None
+            sample = entries[0]
     
-    if not sample:
-        print("⚠️ No sample data found to base test on.")
-        return
-
     # Extract the function declarations (everything before user message)
-    # Be careful with finding exact substrings
-    try:
-        base_prompt = sample["prompt"].rsplit("<start_of_turn>user", 1)[0]
-    except Exception:
-        # Fallback if format is different
-        print("⚠️ Could not extract base prompt cleanly, using simple fallback.")
-        base_prompt = "<start_of_turn>developer You are a model that can do function calling..."
+    base_prompt = sample["prompt"].rsplit("<start_of_turn>user", 1)[0]
     
     test_prompts = [
         "Turn on the bedroom lights",
         "Set a timer for 5 minutes",
         "Hello",
+        "Search for weather",
     ]
     
     model.eval()
@@ -379,14 +352,20 @@ def test_model(model, tokenizer, config: dict):
         new_tokens = outputs[0][inputs['input_ids'].shape[1]:]
         response = tokenizer.decode(new_tokens, skip_special_tokens=False)
         
-        print(f"📝 Input: {user_input}")
-        
-        # Simple extraction for view
+        # Extract function call
         if "<start_function_call>" in response:
-            print(f"🤖 Function Call: {response.strip()}")
+            start = response.find("<start_function_call>")
+            end = response.find("<end_function_call>")
+            if end > start:
+                func = response[start + len("<start_function_call>"):end]
+                print(f"� Input: {user_input}")
+                print(f"🤖 Output: {func}")
+            else:
+                print(f"📝 Input: {user_input}")
+                print(f"🤖 Raw: {response[:100]}")
         else:
-            print(f"🤖 Output: {response.strip()}")
-            
+            print(f"� Input: {user_input}")
+            print(f"🤖 Raw: {response[:100]}")
         print("-" * 60)
 
 
@@ -431,8 +410,8 @@ def main():
         
     except torch.cuda.OutOfMemoryError:
         print("\n❌ GPU Out of Memory!")
-        print("   Try reducing batch_size to 1 in the CONFIG")
-        print("   (Though 270M model should easily fit!)")
+        print("   Try reducing batch_size to 2 in the CONFIG")
+        print("   Or reduce max_seq_length to 768")
     except KeyboardInterrupt:
         print("\n\n⚠️  Training interrupted. Checkpoints saved in output directory.")
     except Exception as e:

@@ -6,12 +6,13 @@ import psutil
 
 # Model configurations: (model_name, think_enabled, display_name)
 MODELS = [
-    {"model": "qwen3:0.6b", "think": False, "name": "qwen3:0.6b"},
+    #{"model": "qwen3:0.6b", "think": False, "name": "qwen3:0.6b"},
     #{"model": "qwen3:0.6b", "think": True, "name": "qwen3:0.6b (think)"},
     {"model": "qwen3:1.7b", "think": False, "name": "qwen3:1.7b"},
     #{"model": "qwen3:1.7b", "think": True, "name": "qwen3:1.7b (think)"},
+    #{"model": "qwen3:4b", "think": False, "name": "qwen3:4b"},
+    #{"model": "qwen3:4b", "think": True, "name": "qwen3:4b (think)"},
     {"model": "gemma3:1b", "think": False, "name": "gemma3:1b"},
-    {"model": "gemma3:270m", "think": False, "name": "gemma3:270m"},
     {"model": "deepseek-r1:1.5b", "think": False, "name": "deepseek-r1:1.5b"},
     #{"model": "deepseek-r1:1.5b", "think": True, "name": "deepseek-r1:1.5b (think)"},
 ] 
@@ -47,8 +48,12 @@ QA_PAIRS = [
     {"prompt": "How many days are in a leap year? Answer with just the number.", "expected": ["366"]},
 ]
 
-URL_GENERATE = "http://localhost:11434/api/chat"
-URL_PS = "http://localhost:11434/api/ps"
+URL_GENERATE = "http://127.0.0.1:11434/api/chat"
+URL_PS = "http://127.0.0.1:11434/api/ps"
+
+# Persistent session for connection pooling
+session = requests.Session()
+session.trust_env = False  # Bypasses system proxies (critical for local speed)
 
 def get_ram_usage(model_name):
     """
@@ -61,7 +66,7 @@ def get_ram_usage(model_name):
     # 2. Get Model Specific Memory from Ollama API
     model_mem_gb = 0.0
     try:
-        response = requests.get(URL_PS)
+        response = session.get(URL_PS)
         if response.status_code == 200:
             models_data = response.json().get('models', [])
             for m in models_data:
@@ -95,28 +100,29 @@ def run_benchmark(model_name, prompt, think=False):
     eval_duration_ns = 0
     response_text = ""
     
+    load_duration_ns = 0
+    prompt_eval_duration_ns = 0
+    
     start_time = time.time()
+    first_chunk_received_time = 0
     first_token_received = False
     
     try:
-        # Send Request
-        with requests.post(URL_GENERATE, json=payload, stream=True) as r:
+        # Send Request using the pooled session
+        with session.post(URL_GENERATE, json=payload, stream=True) as r:
             r.raise_for_status()
             
             for line in r.iter_lines():
                 if not line: continue
+                
+                if first_chunk_received_time == 0:
+                    first_chunk_received_time = time.time() - start_time
                 
                 # Parse Chunk
                 try:
                     chunk = json.loads(line.decode('utf-8'))
                 except:
                     continue
-                
-                # Show thinking content in real-time (for thinking models)
-                thinking_content = chunk.get('message', {}).get('thinking', '')
-                if thinking_content and think:
-                    sys.stdout.write(f"\033[90m{thinking_content}\033[0m")  # Gray text
-                    sys.stdout.flush()
                 
                 # Accumulate response text
                 content = chunk.get('message', {}).get('content', '')
@@ -133,21 +139,31 @@ def run_benchmark(model_name, prompt, think=False):
                 if chunk.get('done') is True:
                     total_tokens = chunk.get('eval_count', 0)
                     eval_duration_ns = chunk.get('eval_duration', 0)
+                    load_duration_ns = chunk.get('load_duration', 0)
+                    prompt_eval_duration_ns = chunk.get('prompt_eval_duration', 0)
 
         # Calculate TPS (Tokens Per Second)
-        # We use the API's reported duration for precision, falling back to wall time if needed
         if eval_duration_ns > 0:
             tps = total_tokens / (eval_duration_ns / 1_000_000_000)
         else:
-            # Fallback if API doesn't report duration (rare)
             total_time = time.time() - start_time
             tps = total_tokens / total_time if total_time > 0 else 0
 
-        return tps, ttft, total_tokens, response_text
+        metrics = {
+            "tps": tps,
+            "ttft": ttft,
+            "tokens": total_tokens,
+            "response": response_text,
+            "load_ms": load_duration_ns / 1_000_000,
+            "prompt_eval_ms": prompt_eval_duration_ns / 1_000_000,
+            "first_chunk_ms": first_chunk_received_time * 1000
+        }
+
+        return metrics
 
     except Exception as e:
         print(f"\nError: {e}")
-        return 0, 0, 0, ""
+        return {"tps": 0, "ttft": 0, "tokens": 0, "response": "", "load_ms": 0, "prompt_eval_ms": 0, "first_chunk_ms": 0}
 
 
 def check_accuracy(response, expected_answers):
@@ -168,8 +184,10 @@ def main():
     model_names = [m["name"] for m in MODELS]
     print(f"Benchmark: {', '.join(model_names)}")
     print(f"Testing with {len(QA_PAIRS)} ground truth Q&A pairs\n")
-    print(f"{'MODEL':<25} | {'METRIC':<12} | {'VALUE':<10} | {'NOTE'}")
-    print("-" * 85)
+    print(f"{'MODEL':<25} | {'METRIC':<12} | {'VALUE':<10} | {'INFO'}")
+    print("-" * 95)
+
+    all_results = []
 
     for config in MODELS:
         model = config["model"]
@@ -177,7 +195,6 @@ def main():
         display_name = config["name"]
         
         # --- 1. WARMUP & RAM CHECK ---
-        # We run a silent request to force the model into memory
         sys.stdout.write(f"Loading {display_name}...\r")
         sys.stdout.flush()
         
@@ -194,9 +211,11 @@ def main():
         # --- 2. RUN TESTS ---
         total_tps = 0
         total_ttft = 0
+        total_load = 0
+        total_peval = 0
         count = 0
         correct = 0
-        wrong_answers = []  # Track which ones it got wrong
+        wrong_answers = []
         
         print(f"{display_name:<25} | {'RAM (Sys)':<12} | {sys_ram:.1f} GB     | Total System Memory Used")
         print(f"{display_name:<25} | {'VRAM/Size':<12} | {model_ram:.1f} GB     | Model Size in Memory")
@@ -205,44 +224,69 @@ def main():
             sys.stdout.write(f"  Testing {display_name}: {i+1}/{len(QA_PAIRS)}...\r")
             sys.stdout.flush()
             
-            tps, ttft, tokens, response = run_benchmark(model, qa["prompt"], think)
+            res = run_benchmark(model, qa["prompt"], think)
             
-            if tps > 0:
-                total_tps += tps
-                total_ttft += ttft
+            if res["tps"] > 0:
+                total_tps += res["tps"]
+                total_ttft += res["ttft"]
+                total_load += res["load_ms"]
+                total_peval += res["prompt_eval_ms"]
                 count += 1
                 
                 # Check accuracy
-                if check_accuracy(response, qa["expected"]):
+                if check_accuracy(res["response"], qa["expected"]):
                     correct += 1
                 else:
                     wrong_answers.append({
                         "q": qa["prompt"][:40] + "...",
                         "expected": qa["expected"],
-                        "got": response.strip()[:50]
+                        "got": res["response"].strip()[:50]
                     })
 
         # --- 3. RESULTS ---
         if count > 0:
             avg_tps = total_tps / count
             avg_ttft = total_ttft / count
+            avg_load = total_load / count
+            avg_peval = total_peval / count
             accuracy = (correct / len(QA_PAIRS)) * 100
             
             # Print Final Stats for this model
             print(f"{display_name:<25} | {'Avg Speed':<12} | {avg_tps:<6.1f} T/s | Generation Speed")
-            print(f"{display_name:<25} | {'Avg TTFT':<12} | {avg_ttft*1000:<6.0f} ms   | Time to First Token")
+            print(f"{display_name:<25} | {'Avg TTFT':<12} | {avg_ttft*1000:<6.0f} ms   | Time to First Token (Wall)")
+            print(f"{display_name:<25} | {'Avg Load':<12} | {avg_load:<6.0f} ms   | Model Load Time (API)")
+            print(f"{display_name:<25} | {'Avg Prep':<12} | {avg_peval:<6.0f} ms   | Prompt Eval Time (API)")
             print(f"{display_name:<25} | {'Accuracy':<12} | {correct}/{len(QA_PAIRS)} ({accuracy:.0f}%) | Ground Truth Score")
             
             # Show wrong answers if any (optional verbose)
             if wrong_answers and len(wrong_answers) <= 5:
                 for w in wrong_answers:
-                    print(f"  ❌ Expected {w['expected']}, got: {w['got']}")
+                    print(f"  [X] Expected {w['expected']}, got: {w['got']}")
             elif wrong_answers:
-                print(f"  ❌ {len(wrong_answers)} incorrect answers")
+                print(f"  [X] {len(wrong_answers)} incorrect answers")
+            
+            all_results.append({
+                "name": display_name,
+                "tps": avg_tps,
+                "ttft": avg_ttft * 1000,
+                "accuracy": accuracy,
+                "vram": model_ram
+            })
                 
             print("-" * 85)
         else:
             print(f"{display_name:<25} | Failed to run tests.")
+
+    # --- 4. FINAL COMPARISON ---
+    if all_results:
+        print("\n\n" + "=" * 85)
+        print(f"{'FINAL MODEL COMPARISON':^85}")
+        print("=" * 85)
+        print(f"{'MODEL':<25} | {'SPEED (T/s)':<12} | {'TTFT (ms)':<10} | {'VRAM (GB)':<10} | {'ACCURACY'}")
+        print("-" * 95)
+        for r in sorted(all_results, key=lambda x: x['tps'], reverse=True):
+            print(f"{r['name']:<25} | {r['tps']:<12.1f} | {r['ttft']:<10.0f} | {r['vram']:<10.1f} | {r['accuracy']:.0f}%")
+        print("=" * 95)
 
 if __name__ == "__main__":
     main()
