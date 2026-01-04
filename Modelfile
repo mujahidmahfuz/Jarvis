@@ -1,0 +1,6 @@
+FROM ./functiongemma-merged
+PARAMETER temperature 0.0
+PARAMETER top_p 0.9
+PARAMETER num_predict 100
+PARAMETER stop "<end_of_turn>"
+PARAMETER stop "<end_function_call>"

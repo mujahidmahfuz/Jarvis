@@ -12,7 +12,7 @@ from datetime import datetime
 from pathlib import Path
 from collections import defaultdict
 
-MODEL = "functiongemma-custom"
+MODEL = "functiongemma-ada:latest"
 URL = "http://localhost:11434/api/generate"
 
 # Official FunctionGemma JSON Schema format for function definitions
