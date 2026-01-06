@@ -223,6 +223,7 @@ class PiperTTS:
         self.speech_queue = queue.Queue()
         self.worker_thread = None
         self.running = False
+        self.interrupt_event = threading.Event()
         self.models_dir = Path.home() / ".local" / "share" / "piper" / "voices"
         
         try:
@@ -274,9 +275,19 @@ class PiperTTS:
         """Background thread that plays queued sentences."""
         while self.running:
             try:
+                # Check for interrupt before getting next sentence
+                if self.interrupt_event.is_set():
+                    self.interrupt_event.clear()
+                
                 text = self.speech_queue.get(timeout=0.5)
                 if text is None:
                     break
+                
+                # Check again
+                if self.interrupt_event.is_set():
+                    self.speech_queue.task_done()
+                    continue
+
                 self._speak_text(text)
                 self.speech_queue.task_done()
             except queue.Empty:
@@ -291,10 +302,15 @@ class PiperTTS:
             sample_rate = self.voice.config.sample_rate
             
             # Stream audio directly to output device
-            with sd.OutputStream(samplerate=sample_rate, channels=1, dtype='int16') as stream:
+            with sd.OutputStream(samplerate=sample_rate, channels=1, dtype='int16', latency='low') as stream:
+                self.current_stream = stream
                 for audio_chunk in self.voice.synthesize(text):
+                    if self.interrupt_event.is_set():
+                        stream.abort() # Instant stop
+                        break 
                     data = np.frombuffer(audio_chunk.audio_int16_bytes, dtype=np.int16)
                     stream.write(data)
+                self.current_stream = None
                     
         except Exception as e:
             print(f"{GRAY}[TTS Error]: {e}{RESET}")
@@ -303,7 +319,20 @@ class PiperTTS:
         """Add a sentence to the speech queue."""
         if self.enabled and self.voice and sentence.strip():
             self.speech_queue.put(sentence)
-    
+            
+    def stop(self):
+        """Interrupt current speech and clear queue."""
+        self.interrupt_event.set()
+        # Clear queue safely
+        with self.speech_queue.mutex:
+            self.speech_queue.queue.clear()
+        # Abort active stream
+        if hasattr(self, 'current_stream') and self.current_stream:
+            try:
+                self.current_stream.abort()
+            except:
+                pass
+            
     def wait_for_completion(self):
         """Wait for all queued speech to finish."""
         if self.enabled:
@@ -322,6 +351,7 @@ class PiperTTS:
     def shutdown(self):
         """Clean up resources."""
         self.running = False
+        self.stop()
         self.speech_queue.put(None)
 
 
@@ -372,7 +402,7 @@ def preload_models():
     def load_router():
         global router
         try:
-            router = FunctionGemmaRouter(model_path=LOCAL_ROUTER_PATH, compile_model=True)
+            router = FunctionGemmaRouter(model_path=LOCAL_ROUTER_PATH, compile_model=False)
             # Warm up
             router.route("Hello")
         except Exception as e:
