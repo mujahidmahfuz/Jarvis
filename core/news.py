@@ -46,6 +46,8 @@ class NewsManager:
 
         except Exception as e:
             print(f"Error fetching news from DDGS: {e}")
+            # Rate limit or connection error - return empty to trigger fallback
+            # In a production app, we might retry with backoff, but for now we fail gracefully.
             return []
 
         # 3. AI Curation
