@@ -114,7 +114,7 @@ def preload_models():
             http_session.post(f"{OLLAMA_URL}/chat", json={
                 "model": RESPONDER_MODEL, 
                 "messages": [], 
-                "keep_alive": "1m"
+                "keep_alive": "30m"  # Keep warm for 30 minutes after startup
             }, timeout=1)
         except:
             pass
