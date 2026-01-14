@@ -120,6 +120,11 @@ class ChatWorker(QObject):
             if data.get("weather"):
                 w = data['weather']
                 context_parts.append(f"Weather: {w.get('temp')}°F, {w.get('condition')}")
+            if data.get("news"):
+                news_items = data['news']
+                if news_items:
+                    news_titles = [item.get('title', '')[:50] for item in news_items[:3]]
+                    context_parts.append(f"Top news: {', '.join(news_titles)}")
             
             context_msg = "SYSTEM CONTEXT:\n" + "\n".join(context_parts) if context_parts else ""
         else:

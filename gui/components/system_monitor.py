@@ -96,6 +96,7 @@ class SystemMonitor(QFrame):
         self.setObjectName("systemMonitor")
         self._setup_ui()
         self._init_worker()
+        self._init_voice_indicator()
     
     def _setup_ui(self):
         """Build the monitor UI."""
@@ -198,7 +199,60 @@ class SystemMonitor(QFrame):
         models_container.addWidget(self.models_value)
         layout.addLayout(models_container)
         
+        # Voice listening indicator (simple glowing bar)
+        self.voice_indicator = QFrame()
+        self.voice_indicator.setFixedSize(4, 20)
+        self.voice_indicator.setStyleSheet("""
+            QFrame {
+                background: transparent;
+                border-radius: 2px;
+            }
+        """)
+        self.voice_indicator.hide()
+        layout.addWidget(self.voice_indicator)
+        
         layout.addStretch()
+    
+    def _init_voice_indicator(self):
+        """Initialize voice listening indicator animation."""
+        from PySide6.QtCore import QPropertyAnimation, QEasingCurve, QTimer
+        
+        # Create pulsing animation for the indicator
+        self.voice_animation = QPropertyAnimation(self.voice_indicator, b"styleSheet")
+        self.voice_animation.setDuration(1000)
+        self.voice_animation.setLoopCount(-1)  # Infinite
+        self.voice_animation.setEasingCurve(QEasingCurve.InOutSine)
+        
+        # Animation values (glowing effect)
+        self.voice_animation.setStartValue("""
+            QFrame {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(51, 181, 229, 150),
+                    stop:0.5 rgba(51, 181, 229, 255),
+                    stop:1 rgba(51, 181, 229, 150));
+                border-radius: 2px;
+            }
+        """)
+        self.voice_animation.setEndValue("""
+            QFrame {
+                background: qlineargradient(x1:0, y1:0, x2:0, y2:1,
+                    stop:0 rgba(51, 181, 229, 255),
+                    stop:0.5 rgba(51, 181, 229, 150),
+                    stop:1 rgba(51, 181, 229, 255));
+                border-radius: 2px;
+            }
+        """)
+    
+    def show_listening(self):
+        """Show the voice listening indicator."""
+        if not self.voice_indicator.isVisible():
+            self.voice_indicator.show()
+            self.voice_animation.start()
+    
+    def hide_listening(self):
+        """Hide the voice listening indicator."""
+        self.voice_animation.stop()
+        self.voice_indicator.hide()
     
     def _init_worker(self):
         """Initialize the background worker and thread."""

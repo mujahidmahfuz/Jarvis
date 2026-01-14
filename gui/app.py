@@ -17,7 +17,7 @@ from gui.handlers import ChatHandlers
 from core.model_manager import unload_all_models
 from core.voice_assistant import voice_assistant
 from core.tts import tts
-from config import VOICE_ASSISTANT_ENABLED
+from config import VOICE_ASSISTANT_ENABLED, GREEN, RESET
 
 from gui.styles import AURA_STYLESHEET 
 
@@ -73,8 +73,7 @@ class MainWindow(FluentWindow):
         # Add system monitor to title bar
         self._init_system_monitor()
         
-        # Initialize voice indicator
-        self.voice_indicator = VoiceIndicator(self)
+        # Voice indicator is now in system monitor (removed overlay)
         
         # Initialize sub-interfaces pointers
         self.chat_tab = None
@@ -105,6 +104,11 @@ class MainWindow(FluentWindow):
             voice_assistant.wake_word_detected.connect(self._on_wake_word_detected)
             voice_assistant.speech_recognized.connect(self._on_speech_recognized)
             voice_assistant.processing_finished.connect(self._on_processing_finished)
+            # Connect GUI update signals
+            voice_assistant.timer_set.connect(self._on_voice_timer_set)
+            voice_assistant.alarm_added.connect(self._on_voice_alarm_added)
+            voice_assistant.calendar_updated.connect(self._on_voice_calendar_updated)
+            voice_assistant.task_added.connect(self._on_voice_task_added)
             print(f"[App] ✓ Signals connected")
             
             # Initialize in background thread to avoid blocking UI
@@ -131,7 +135,8 @@ class MainWindow(FluentWindow):
         print(f"{GREEN}[App] ✓ Wake word signal received in UI thread!{RESET}")
         if VOICE_ASSISTANT_ENABLED:
             print(f"{GREEN}[App] Showing voice indicator...{RESET}")
-            self.voice_indicator.show_listening()
+            # Use system monitor's simple indicator instead of overlay
+            self.system_monitor.show_listening()
             print(f"{GREEN}[App] ✓ Voice indicator shown{RESET}")
         else:
             print(f"{GRAY}[App] Voice assistant disabled in config{RESET}")
@@ -139,14 +144,59 @@ class MainWindow(FluentWindow):
     def _on_speech_recognized(self, text: str):
         """Handle speech recognition - update indicator text if needed."""
         # Keep showing indicator while processing
-        # Could update text here if we want to show what was recognized
         pass
     
     def _on_processing_finished(self):
         """Handle processing finished - hide listening indicator."""
         if VOICE_ASSISTANT_ENABLED:
-            # Small delay before hiding to make it more visible
-            self.voice_indicator.hide_listening(delay_ms=800)
+            # Small delay before hiding
+            from PySide6.QtCore import QTimer
+            QTimer.singleShot(500, lambda: self.system_monitor.hide_listening())
+    
+    def _on_voice_timer_set(self, seconds: int, label: str):
+        """Handle timer set via voice - update GUI."""
+        # Ensure planner tab is loaded
+        if not self.planner_tab:
+            # Try to initialize if lazy
+            if hasattr(self, 'planner_lazy'):
+                self.planner_tab = self.planner_lazy.initialize()
+        
+        if self.planner_tab and hasattr(self.planner_tab, 'timer_component'):
+            self.planner_tab.timer_component.set_and_start(seconds, label)
+            print(f"[App] Timer updated via voice: {seconds}s, {label}")
+    
+    def _on_voice_alarm_added(self):
+        """Handle alarm added via voice - update GUI."""
+        # Ensure planner tab is loaded
+        if not self.planner_tab:
+            if hasattr(self, 'planner_lazy'):
+                self.planner_tab = self.planner_lazy.initialize()
+        
+        if self.planner_tab and hasattr(self.planner_tab, 'alarm_component'):
+            self.planner_tab.alarm_component.reload()
+            print(f"[App] Alarms refreshed via voice")
+    
+    def _on_voice_calendar_updated(self):
+        """Handle calendar event added via voice - refresh calendar."""
+        # Ensure planner tab is loaded
+        if not self.planner_tab:
+            if hasattr(self, 'planner_lazy'):
+                self.planner_tab = self.planner_lazy.initialize()
+        
+        if self.planner_tab and hasattr(self.planner_tab, 'schedule_component'):
+            self.planner_tab.schedule_component.refresh_events()
+            print(f"[App] Calendar refreshed via voice")
+    
+    def _on_voice_task_added(self):
+        """Handle task added via voice - refresh task list."""
+        # Ensure planner tab is loaded
+        if not self.planner_tab:
+            if hasattr(self, 'planner_lazy'):
+                self.planner_tab = self.planner_lazy.initialize()
+        
+        if self.planner_tab and hasattr(self.planner_tab, '_load_tasks'):
+            self.planner_tab._load_tasks()
+            print(f"[App] Tasks refreshed via voice")
         
     def _init_window(self):
         # Dashboard is loaded immediately as it's the home screen

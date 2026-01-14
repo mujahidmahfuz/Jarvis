@@ -34,6 +34,11 @@ class VoiceAssistant(QObject):
     processing_started = Signal()
     processing_finished = Signal()
     error_occurred = Signal(str)
+    # GUI update signals
+    timer_set = Signal(int, str)  # seconds, label
+    alarm_added = Signal()
+    calendar_updated = Signal()
+    task_added = Signal()
     
     def __init__(self):
         super().__init__()
@@ -150,6 +155,18 @@ class VoiceAssistant(QObject):
                 result = function_executor.execute(func_name, params)
                 response_text = result.get("message", "Done.")
                 
+                # Emit GUI update signals for specific actions
+                if func_name == "set_timer" and result.get("success"):
+                    seconds = result.get("data", {}).get("seconds", 0)
+                    label = result.get("data", {}).get("label", "Timer")
+                    self.timer_set.emit(seconds, label)
+                elif func_name == "set_alarm" and result.get("success"):
+                    self.alarm_added.emit()
+                elif func_name == "create_calendar_event" and result.get("success"):
+                    self.calendar_updated.emit()
+                elif func_name == "add_task" and result.get("success"):
+                    self.task_added.emit()
+                
                 # Generate Qwen response with context
                 self._generate_response_with_context(func_name, result, user_text)
                 
@@ -187,7 +204,34 @@ class VoiceAssistant(QObject):
             # Build context message
             success = result.get("success", False)
             message = result.get("message", "")
-            context_msg = f"Function {func_name} executed. Success: {success}. Result: {message}"
+            
+            # Enhanced context for get_system_info
+            if func_name == "get_system_info" and success:
+                data = result.get("data", {})
+                context_parts = []
+                if data.get("timers"):
+                    context_parts.append(f"Active timers: {data['timers']}")
+                if data.get("alarms"):
+                    context_parts.append(f"Alarms: {data['alarms']}")
+                if data.get("calendar_today"):
+                    context_parts.append(f"Today's events: {data['calendar_today']}")
+                if data.get("tasks"):
+                    pending = [t for t in data['tasks'] if not t.get('completed')]
+                    context_parts.append(f"Pending tasks: {len(pending)} items")
+                if data.get("smart_devices"):
+                    on_devices = [d['name'] for d in data['smart_devices'] if d.get('is_on')]
+                    context_parts.append(f"Devices on: {on_devices if on_devices else 'none'}")
+                if data.get("weather"):
+                    w = data['weather']
+                    context_parts.append(f"Weather: {w.get('temp')}°F, {w.get('condition')}")
+                if data.get("news"):
+                    news_items = data['news']
+                    if news_items:
+                        news_titles = [item.get('title', '')[:50] for item in news_items[:3]]
+                        context_parts.append(f"Top news: {', '.join(news_titles)}")
+                context_msg = "SYSTEM CONTEXT:\n" + "\n".join(context_parts) if context_parts else "No system information available."
+            else:
+                context_msg = f"Function {func_name} executed. Success: {success}. Result: {message}"
             
             # Manage context window
             max_hist = MAX_HISTORY
@@ -211,7 +255,7 @@ class VoiceAssistant(QObject):
             full_response = ""
             
             # Stream response
-            with http_session.post(f"{OLLAMA_URL}/api/chat", json=payload, stream=True) as r:
+            with http_session.post(f"{OLLAMA_URL}/chat", json=payload, stream=True) as r:
                 r.raise_for_status()
                 
                 for line in r.iter_lines():
@@ -279,7 +323,7 @@ class VoiceAssistant(QObject):
             full_response = ""
             
             # Stream response
-            with http_session.post(f"{OLLAMA_URL}/api/chat", json=payload, stream=True) as r:
+            with http_session.post(f"{OLLAMA_URL}/chat", json=payload, stream=True) as r:
                 r.raise_for_status()
                 
                 for line in r.iter_lines():

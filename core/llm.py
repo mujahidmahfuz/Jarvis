@@ -7,7 +7,7 @@ import threading
 
 from config import (
     RESPONDER_MODEL, OLLAMA_URL, LOCAL_ROUTER_PATH,
-    ROUTER_KEYWORDS, GRAY, RESET
+    GRAY, RESET
 )
 
 # Persistent Session for faster HTTP
@@ -24,9 +24,9 @@ def is_router_loaded():
 
 def should_bypass_router(text):
     """Return True if text definitely doesn't need routing."""
-    # text = text.lower()
-    # return not any(k in text for k in ROUTER_KEYWORDS)
-    return False  # Force router to always run for debugging purposes
+    # All queries now go through Function Gemma router
+    # This function is kept for compatibility but always returns False
+    return False
 
 
 def route_query(user_input):

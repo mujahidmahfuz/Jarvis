@@ -45,6 +45,7 @@ class FunctionExecutor:
         self.calendar_manager = None
         self.kasa_manager = None
         self.weather_manager = None
+        self.news_manager = None
         
         # In-memory timer storage
         self.active_timers: Dict[str, ActiveTimer] = {}
@@ -78,6 +79,12 @@ class FunctionExecutor:
             self.weather_manager = WeatherManager()
         except Exception as e:
             print(f"[FunctionExecutor] WeatherManager init failed: {e}")
+        
+        try:
+            from core.news import NewsManager
+            self.news_manager = NewsManager()
+        except Exception as e:
+            print(f"[FunctionExecutor] NewsManager init failed: {e}")
     
     def execute(self, func_name: str, params: Dict[str, Any]) -> Dict[str, Any]:
         """
@@ -407,7 +414,8 @@ class FunctionExecutor:
             "calendar_today": [],
             "tasks": [],
             "smart_devices": [],
-            "weather": None
+            "weather": None,
+            "news": []
         }
         
         # Active timers
@@ -468,6 +476,24 @@ class FunctionExecutor:
                         "low": weather.get("daily", {}).get("low")
                     }
             except:
+                pass
+        
+        # News
+        if self.news_manager:
+            try:
+                # Get recent news (cached or fresh)
+                news_items = self.news_manager.get_briefing(use_ai=False)
+                # Limit to top 5 for system info
+                info["news"] = [
+                    {
+                        "title": item.get("title", ""),
+                        "category": item.get("category", "News"),
+                        "url": item.get("url", "")
+                    }
+                    for item in news_items[:5]
+                ]
+            except Exception as e:
+                print(f"[FunctionExecutor] News fetch error: {e}")
                 pass
         
         return {
