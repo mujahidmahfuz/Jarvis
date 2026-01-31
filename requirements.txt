@@ -12,7 +12,7 @@
 # Core GUI Framework
 # -----------------------------------------------------
 PySide6>=6.5.0                 # Qt GUI framework for Python
-qfluentwidgets>=1.0.0          # Fluent Design UI components for Windows 11 aesthetic
+PyQt-Fluent-Widgets>=1.0.0    # Fluent Design UI components for Windows 11 aesthetic
 darkdetect>=0.8.0              # Detect system dark/light mode
 
 # -----------------------------------------------------
