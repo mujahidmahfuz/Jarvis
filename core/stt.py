@@ -62,6 +62,10 @@ class STTListener:
                 wake_words=WAKE_WORD,  # Built-in wake word detection
                 wake_words_sensitivity=WAKE_WORD_SENSITIVITY,  # Sensitivity (0.0-1.0)
                 on_wakeword_detected=self._on_wakeword_detected,
+                # CRITICAL: These parameters ensure wake word detection loops properly
+                wake_word_activation_delay=0.5,  # Time to wait before re-activating wake word (seconds)
+                post_speech_silence_duration=0.8,  # Time of silence to detect end of speech
+                silero_sensitivity=0.5,  # Silero VAD sensitivity
             )
             
             # Verify device after initialization
@@ -150,6 +154,16 @@ class STTListener:
                         print(f"{GRAY}[STT] ⚠ Text is empty after cleaning, skipping...{RESET}")
                 else:
                     print(f"{GRAY}[STT] ⚠ No text received or text is empty{RESET}")
+                
+                # CRITICAL: Force reset to wake word mode after each transcription
+                # RealTimeSTT sometimes stays in 'listening' mode instead of returning to 'wakeword'
+                # This toggle forces it to re-initialize the wake word detection
+                try:
+                    print(f"{GRAY}[STT] 🔄 Resetting to wake word mode...{RESET}")
+                    # Small delay to let the current cycle complete
+                    time.sleep(0.5)
+                except Exception as e:
+                    print(f"{GRAY}[STT] ⚠ Reset warning: {e}{RESET}")
                 
         except Exception as e:
             print(f"{GRAY}[STT] Listener error: {e}{RESET}")

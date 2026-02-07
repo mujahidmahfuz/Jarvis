@@ -2,6 +2,14 @@
 Pocket AI - Main Entry Point
 """
 
+import os
+# Workaround for torch/PySide6 DLL conflict (WinError 1114)
+# Importing torch before PySide6 often resolves startup crashes on Windows.
+try:
+    import torch
+except ImportError:
+    pass
+
 import warnings
 import sys
 
